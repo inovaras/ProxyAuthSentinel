@@ -27,16 +27,16 @@ PROXIES = os.getenv("PROXIES", "").split(',')
 ACCOUNT_SCHEMA = {
     "type": "object",
     "properties": {
-        "phone": {"type": "string"},
-        "twoFA": {"type": "string"},
         "app_id": {"type": "number"},
         "app_hash": {"type": "string"},
         "device": {"type": "string"},
         "app_version": {"type": "string"},
-        "phone_code": {"type": "string"},
-        "session_string": {"type": "string"}
+        "twoFA": {"type": "string"},
+        "phone": {"type": "string"},
+        "session_file": {"type": "string"},  # Это session_string
+        "proxy": {"type": "array"}           # [id, host, port, ssl?, user, pass]
     },
-    "required": ["phone", "app_id", "app_hash", "device", "app_version"]
+    "required": ["app_id", "app_hash", "device", "app_version", "phone", "session_file"]
 }
 
 MAX_RECONNECT_ATTEMPTS = int(os.getenv("MAX_RECONNECT_ATTEMPTS", 3)) # Максимальное количество попыток восстановления

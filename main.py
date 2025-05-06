@@ -76,96 +76,98 @@ async def check_spamblock(client: TelegramClient) -> Dict[str, Any]:
 
 
 async def try_reconnect(account_data: dict, json_file: str) -> Dict[str, Any]:
-    """Попытка восстановления аккаунта"""
+    """Попытка восстановления аккаунта без кода"""
     client = None
     try:
         for attempt in range(1, MAX_RECONNECT_ATTEMPTS + 1):
             try:
-                proxy_str = random.choice(PROXIES) if PROXIES else None
-                proxy = get_proxy(proxy_str) if proxy_str else None
+                proxy_info = account_data.get("proxy")
+                proxy = None
+                if proxy_info and len(proxy_info) >= 6:
+                    proxy = {
+                        "proxy_type": "socks5",
+                        "addr": proxy_info[1],
+                        "port": int(proxy_info[2]),
+                        "username": proxy_info[4],
+                        "password": proxy_info[5],
+                        "rdns": True
+                    }
 
                 client = TelegramClient(
                     StringSession(),
-                    account_data['app_id'],
-                    account_data['app_hash'],
+                    account_data["app_id"],
+                    account_data["app_hash"],
                     proxy=proxy,
-                    device_model=account_data['device'],
-                    app_version=account_data['app_version']
+                    device_model=account_data["device"],
+                    app_version=account_data["app_version"]
                 )
-
                 await client.connect()
 
-                if not await client.is_user_authorized():
-                    await client.send_code_request(account_data['phone'])
-                    if 'phone_code' in account_data:
-                        await client.sign_in(
-                            phone=account_data['phone'],
-                            code=account_data['phone_code'],
-                            password=account_data.get('twoFA', '')
-                        )
-
+                # Проверяем через SpamBot
                 check_result = await check_spamblock(client)
-                if check_result['status'] == 'ок':
-                    account_data['session_string'] = client.session.save()
-                    with open(json_file, 'w', encoding='utf-8') as f:
+                if check_result["status"] == "ок":
+                    # Сохраняем новую сессию
+                    account_data["session_file"] = client.session.save()
+                    with open(json_file, "w", encoding="utf-8") as f:
                         json.dump(account_data, f, ensure_ascii=False, indent=2)
                     return {"status": "восстановлен", "details": check_result}
 
                 await asyncio.sleep(DELAY_BETWEEN_ATTEMPTS)
-
-            except Exception as e:
-                logger.error(f"Попытка восстановления {attempt} не удалась: {str(e)}")
-                await asyncio.sleep(DELAY_BETWEEN_ATTEMPTS)
-
-        return {"status": "перманентная_блокировка", "details": "Превышено максимальное число попыток"}
-
-    finally:
-        if client:
-            await client.disconnect()
+            finally:
+                if client:
+                    await client.disconnect()
+        return {"status": "перманентная_блокировка", "details": "Не удалось восстановить"}
+    except Exception as e:
+        logger.error(f"Ошибка восстановления: {e}")
+        return {"status": "ошибка", "details": str(e)}
 
 
 async def process_account(account_data: dict, json_file: str) -> Dict[str, Any]:
-    """Обработка одного аккаунта"""
+    """Обработка одного аккаунта без использования phone_code"""
     client = None
     try:
-        proxy = get_proxy(random.choice(PROXIES)) if PROXIES else None
+        proxy_info = account_data.get("proxy")
+        proxy = None
+        if proxy_info and len(proxy_info) >= 6:
+            proxy = {
+                "proxy_type": "socks5",
+                "addr": proxy_info[1],
+                "port": int(proxy_info[2]),
+                "username": proxy_info[4],
+                "password": proxy_info[5],
+                "rdns": True
+            }
+
         client = TelegramClient(
-            StringSession(account_data.get('session_string', '')),
-            account_data['app_id'],
-            account_data['app_hash'],
+            StringSession(account_data["session_file"]),
+            account_data["app_id"],
+            account_data["app_hash"],
             proxy=proxy,
-            device_model=account_data['device'],
-            app_version=account_data['app_version']
+            device_model=account_data["device"],
+            app_version=account_data["app_version"]
         )
 
         await client.connect()
 
         if not await client.is_user_authorized():
-            if 'phone_code' in account_data:
-                await client.sign_in(
-                    phone=account_data['phone'],
-                    code=account_data['phone_code'],
-                    password=account_data.get('twoFA', '')
-                )
-                account_data['session_string'] = client.session.save()
-                with open(json_file, 'w', encoding='utf-8') as f:
-                    json.dump(account_data, f, ensure_ascii=False, indent=2)
-            else:
-                await client.send_code_request(account_data['phone'])
-                return {"status": "требуется_код"}
-
-        check_result = await check_spamblock(client)
-        if check_result['status'] == 'спам_блок':
+            # Попробовать автоматическое восстановление через SpamBot
+            logger.info(f"Аккаунт {account_data['phone']} не авторизован. Пробуем через SpamBot...")
             return await try_reconnect(account_data, json_file)
 
-        return check_result
+        return await check_spamblock(client)
 
     except SessionPasswordNeededError:
-        return {"status": "требуется_2fa"}
-    except PhoneCodeInvalidError:
-        return {"status": "неверный_код"}
+        # Если нужен 2FA, используем его
+        if account_data.get("twoFA"):
+            try:
+                await client.sign_in(password=account_data["twoFA"])
+                return await check_spamblock(client)
+            except Exception as e:
+                return {"status": "ошибка_2fa", "details": str(e)}
+        else:
+            return {"status": "требуется_2fa"}
     except Exception as e:
-        logger.error(f"Ошибка обработки: {str(e)}")
+        logger.error(f"Ошибка при авторизации: {str(e)}")
         return {"status": "ошибка", "details": str(e)}
     finally:
         if client:
@@ -210,7 +212,7 @@ async def handle_archive(message: types.Message):
             await message.answer("❌ Поддерживаются только ZIP/RAR архивы")
             return
 
-        # Обработка JSON файлов
+        # Поиск JSON файлов
         json_files = []
         for root, _, files in os.walk(extract_dir):
             json_files.extend(
@@ -226,7 +228,6 @@ async def handle_archive(message: types.Message):
             "активны": 0,
             "спам_блок": 0,
             "ошибки": 0,
-            "требуется_код": 0,
             "требуется_2fa": 0,
             "восстановлено": 0,
             "перманентные_блокировки": 0
@@ -250,8 +251,6 @@ async def handle_archive(message: types.Message):
                             results["восстановлено"] += 1
                         elif result['status'] == 'перманентная_блокировка':
                             results["перманентные_блокировки"] += 1
-                        elif result['status'] == 'требуется_код':
-                            results["требуется_код"] += 1
                         elif result['status'] == 'требуется_2fa':
                             results["требуется_2fa"] += 1
                         else:
@@ -272,7 +271,6 @@ async def handle_archive(message: types.Message):
             f"🔴 Заблокированы: {results['спам_блок']}\n"
             f"♻️ Восстановлено: {results['восстановлено']}\n"
             f"⛔ Перманентные блокировки: {results['перманентные_блокировки']}\n"
-            f"📲 Требуется код: {results['требуется_код']}\n"
             f"🔑 Требуется 2FA: {results['требуется_2fa']}\n"
             f"⚠️ Ошибки: {results['ошибки']}"
         )
@@ -284,10 +282,13 @@ async def handle_archive(message: types.Message):
         await message.answer("⚠️ Ошибка обработки архива")
     finally:
         # Очистка
-        if file_path and os.path.exists(file_path):
-            os.remove(file_path)
-        if os.path.exists(extract_dir):
-            shutil.rmtree(extract_dir)
+        try:
+            if file_path and os.path.exists(file_path):
+                os.remove(file_path)
+            if os.path.exists(extract_dir):
+                shutil.rmtree(extract_dir)
+        except Exception as e:
+            logger.warning(f"Ошибка при очистке: {str(e)}")
 
 
 async def main():
