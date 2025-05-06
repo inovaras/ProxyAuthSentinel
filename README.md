@@ -65,7 +65,7 @@ PROXIES=ip:port:user:pass,ip:port:user:pass
 MAX_RECONNECT_ATTEMPTS=3
 DELAY_BETWEEN_ATTEMPTS=10
 ```
-🤖 Как использовать бота
+
 Запустите бота:
 ```bash
   python main.py
