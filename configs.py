@@ -33,8 +33,8 @@ ACCOUNT_SCHEMA = {
         "app_version": {"type": "string"},
         "twoFA": {"type": "string"},
         "phone": {"type": "string"},
-        "session_file": {"type": "string"},  # Это session_string
-        "proxy": {"type": "array"}           # [id, host, port, ssl?, user, pass]
+        "session_file": {"type": "string"},
+        "proxy": {"type": "array"}
     },
     "required": ["app_id", "app_hash", "device", "app_version", "phone", "session_file"]
 }
